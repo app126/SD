@@ -1,0 +1,68 @@
+version: '3.9'
+services:
+  ec_de_1:
+    build:
+      context: .
+      dockerfile: ./EC_DE/Dockerfile
+    image: ec-de:latest
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://192.168.100.15:5432/easycab
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_APPLICATION_NAME: EC_DE
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: 192.168.100.3:9092
+      CENTRAL_IP: 192.168.100.4
+      CENTRAL_PORT: 8081
+      TAXI_ID: 1
+      SENSOR_PORT: 9091
+    ports:
+      - "8001:8081"
+    networks:
+      - easycab_network
+  ec_de_2:
+    build:
+      context: .
+      dockerfile: ./EC_DE/Dockerfile
+    image: ec-de:latest
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://192.168.100.15:5432/easycab
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_APPLICATION_NAME: EC_DE
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: 192.168.100.3:9092
+      CENTRAL_IP: 192.168.100.4
+      CENTRAL_PORT: 8081
+      TAXI_ID: 2
+      SENSOR_PORT: 9092
+    ports:
+      - "8002:8082"
+    networks:
+      - easycab_network
+  ec_de_3:
+    build:
+      context: .
+      dockerfile: ./EC_DE/Dockerfile
+    image: ec-de:latest
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://192.168.100.15:5432/easycab
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_APPLICATION_NAME: EC_DE
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: 192.168.100.3:9092
+      CENTRAL_IP: 192.168.100.4
+      CENTRAL_PORT: 8081
+      TAXI_ID: 3
+      SENSOR_PORT: 9093
+    ports:
+      - "8003:8083"
+    networks:
+      - easycab_network
+volumes:
+  postgres_data:
+
+networks:
+  easycab_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24

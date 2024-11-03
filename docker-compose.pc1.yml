@@ -1,0 +1,44 @@
+version: '3.9'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks:
+      - easycab_network
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://192.168.1.29:9092
+      KAFKA_ZOOKEEPER_CONNECT: 192.168.1.29:2181
+    ports:
+      - "9092:9092"
+    networks:
+      - easycab_network
+  ec_customer_a:
+    build:
+      context: .
+      dockerfile: ./EC_Customer/Dockerfile
+    image: ec-customer:latest
+    environment:
+      SPRING_APPLICATION_NAME: EC_Customer_a
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: 192.168.1.29:9092
+      CLIENT_ID: "a"
+      broker.address: 192.168.1.29:9092
+      file: destinations1.txt
+    ports:
+      - "9001:8080"
+    networks:
+      easycab_network:
+        ipv4_address: 192.168.100.201
+volumes:
+  postgres_data:
+
+networks:
+  easycab_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24

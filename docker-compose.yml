@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      POSTGRES_DB: easycab
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432" # Mapea el puerto 5432 del contenedor al host
+    networks:
+      easycab_network:
+        ipv4_address: ${POSTGRES_IP}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_IP}:9092
+      KAFKA_ZOOKEEPER_CONNECT: ${ZOOKEEPER_IP}:2181
+    ports:
+      - "9092:9092"
+    networks:
+      - easycab_network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks:
+      - easycab_network
+
+  ec_central:
+    build:
+      context: .
+      dockerfile: ./EC_Central/Dockerfile
+    image: ec-central:latest
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://${POSTGRES_IP}:5432/easycab # Usa la nueva IP fija de PostgreSQL
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_IP}:9092
+      SERVER_PORT: 8081
+    depends_on:
+      - postgres
+      - kafka
+    ports:
+      - "8081:8081"
+    networks:
+      - easycab_network
+
+volumes:
+  postgres_data:
+
+networks:
+  easycab_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24 # Nueva subred
