@@ -6,9 +6,9 @@ ENV_FILE="../.env"
 # Definir todas las variables requeridas con sus valores por defecto
 required_vars=(
   # IPs de los PCs
-  "IP_PC_1=198.19.249.20"  # IP de PC1 donde se ejecutan Kafka y Zookeeper
-  "IP_PC_2=192.168.1.16"  # IP de PC2 donde se ejecutan ec_central y Postgres
-  "IP_PC_3=198.19.249.107"  # IP de PC3 donde se ejecutan EC_DE
+  "IP_PC_1=10.112.153.217"  # IP de PC1 donde se ejecutan Kafka y Zookeeper
+  "IP_PC_2=10.112.153.217"  # IP de PC2 donde se ejecutan ec_central y Postgres
+  "IP_PC_3=10.112.153.217"  # IP de PC3 donde se ejecutan EC_DE
 
   # Variables derivadas basadas en las IPs de los PCs
   "POSTGRES_IP=\${IP_PC_2}"
@@ -126,8 +126,17 @@ fix_invalid_ports() {
   done
 }
 
+# Exportar las variables del archivo .env al entorno
+export_variables() {
+  set -o allexport
+  source "$ENV_FILE"
+  set +o allexport
+  echo "Variables de entorno exportadas."
+}
+
 # Ejecutar funciones
 add_missing_vars
 fix_invalid_ports
+export_variables
 
-echo "Verificación y corrección de variables de entorno completada en $ENV_FILE."
+echo "Verificación, corrección y exportación de variables de entorno completada en $ENV_FILE."

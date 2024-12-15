@@ -3,6 +3,7 @@ package org.example.ec_central.repository;
 import org.example.ec_central.model.entity.CustomerTaxiAssignment;
 import org.example.ec_central.model.entity.CustomerTaxiId;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
@@ -21,4 +22,8 @@ public interface CustomerTaxiAssignmentRepository extends JpaRepository<Customer
      *         if not found
      */
     Optional<CustomerTaxiAssignment> findByIdTaxiId(Long taxiId);
+
+    @Modifying
+    void deleteAllByIdTaxiId(Long taxiId);
+
 }

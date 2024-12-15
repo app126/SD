@@ -37,6 +37,6 @@ public class TaxiWebSocketService {
 
 
         messagingTemplate.convertAndSend("/topic/taxi-coordinates", jsonMap);
-        log.info("Message sent to clients: {}", message);
+        //log.info("Message sent to clients: {}", message);
     }
 }

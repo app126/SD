@@ -19,6 +19,9 @@ import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
+import javax.crypto.SecretKey;
+import java.net.Socket;
+import java.security.PublicKey;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,7 +46,7 @@ public class KafkaService {
     private final CustomerService customerService;
     private final CustomerTaxiAssignmentRepository customerTaxiAssignmentRepository;
     private final CustomerTaxiAssignmentService customerTaxiAssignmentService;
-
+    private final EncryptionService encryptionService;
     private CityMap cityMap;
 
     /**
@@ -52,7 +55,7 @@ public class KafkaService {
     @PostConstruct
     private void fillCityMap() {
         cityMap = new CityMap();
-        new Thread(() -> runThread()).start();
+        new Thread(this::runThread).start();
     }
 
     private void runThread() {
@@ -66,43 +69,7 @@ public class KafkaService {
         }
     }
 
-    /**
-     * Publishes an event indicating that a taxi has been assigned.
-     *
-     * @param taxi the taxi that has been assigned
-     */
-    public void publishTaxiAssignedEvent(Taxi taxi) {
-        String message = "Taxi " + taxi.getIdentifier() + " assigned to position " + taxi.getPosition();
-        kafkaTemplate.send("taxi-status", message);
-        this.logKafkaSend("Published Kafka event: " + message, "taxi-status");
-    }
 
-    /**
-     * Listens for taxi status updates from Kafka.
-     *
-     * @param message the message received from Kafka
-     */
-    @KafkaListener(topics = "taxi-status", groupId = "group")
-    public void listenTaxiStatusUpdates(String message) {
-        log.info("Received Kafka message: {}", message);
-
-        if (message.contains("has arrived at destination")) {
-            String taxiIdentifier = extractTaxiIdentifier(message);
-            taxiService.findTaxiByIdentifier(taxiIdentifier)
-                    .ifPresent(taxiService::releaseTaxi);
-            log.info("Taxi {} has been released.", taxiIdentifier);
-        }
-    }
-
-    /**
-     * Extracts the taxi identifier from a message.
-     *
-     * @param message the message containing the taxi identifier
-     * @return the extracted taxi identifier
-     */
-    private String extractTaxiIdentifier(String message) {
-        return message.split(" ")[1];
-    }
 
     /**
      * Listens for service requests from Kafka.
@@ -167,6 +134,9 @@ public class KafkaService {
         kafkaTemplate.send(topicName, message);
     }
 
+
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     /**
      * Publishes a message to a taxi's Kafka topic.
      *
@@ -174,11 +144,40 @@ public class KafkaService {
      * @param customerStatusDto the customer status data transfer object
      */
     public void publishToTaxi(Taxi taxi, CustomerStatusDto customerStatusDto) {
-        String topicName = "taxi-start-service-" + taxi.getIdentifier();
+        try {
+            String topicName = "taxi-start-service-" + taxi.getIdentifier();
 
-        String message = MappingUtils.map(customerStatusDto);
-        kafkaTemplate.send(topicName, message);
+            // Verificar si la clave pública del taxi está registrada
+            if (encryptionService.getTaxiPublicKey(taxi.getIdentifier()) == null) {
+                throw new IllegalArgumentException("Clave pública no encontrada para el taxi: " + taxi.getIdentifier());
+            }
+
+            // Obtener la clave pública del taxi
+            PublicKey taxiPublicKey = encryptionService.getTaxiPublicKey(taxi.getIdentifier());
+
+            // Generar clave AES
+            SecretKey aesKey = encryptionService.generateAESKey();
+
+            // Convertir DTO a String
+            String message = MappingUtils.map(customerStatusDto);
+
+            // Cifrar el mensaje con AES
+            String encryptedMessage = encryptionService.encryptWithAES(message, aesKey);
+
+            // Cifrar la clave AES con RSA
+            String encryptedAESKey = encryptionService.encryptWithRSA(encryptionService.encodeKey(aesKey), taxiPublicKey);
+
+            // Formar el payload: clave AES cifrada + mensaje cifrado
+            String payload = encryptedAESKey + "#" + encryptedMessage;
+
+            // Publicar el mensaje cifrado en Kafka
+            kafkaTemplate.send(topicName, payload);
+            log.info("Published encrypted Kafka event to {}: {}", topicName, payload);
+        } catch (Exception e) {
+            log.error("Error encrypting or publishing message to taxi {}: {}", taxi.getIdentifier(), e.getMessage());
+        }
     }
+
 
     /**
      * Assigns a taxi to a client.
@@ -193,8 +192,11 @@ public class KafkaService {
         List<Taxi> availableTaxis = taxiRepository.findAllByAvailable(true);
 
         for (Taxi taxi : availableTaxis) {
+            log.info("Taxi disponible en DATABASE: {}, connectedTaxis con sockets(SIN COMPROBAR CONEXION): {}", taxi.getIdentifier(), clientHandler.getConnectedTaxis());
             if (clientHandler.getConnectedTaxis().containsKey(taxi.getIdentifier())) {
-                if (clientHandler.getConnectedTaxis().get(taxi.getIdentifier()).isConnected()) {
+                log.info("Taxi key: {}", taxi.getIdentifier());
+                if (isTaxiConnected(clientHandler.getConnectedTaxis().get(taxi.getIdentifier()), taxi.getIdentifier())) {
+                    log.info("Taxi conectado: {}", taxi.getIdentifier());
                     Optional<Location> location = locationRepository.findByIdentifier(destination);
                     if (location.isEmpty()) {
                         return false;
@@ -203,7 +205,8 @@ public class KafkaService {
                     taxi.setAvailable(false);
                     taxi.setDestIdentifier(customer.getIdentifier());
                     taxi.setState(TaxiState.ASSIGNED); //asignat
-                    taxiRepository.save(taxi);
+                    Taxi savedTaxi = taxiRepository.save(taxi);
+                    log.info("Taxi asignado: {}", savedTaxi.getIdentifier());
 
                     CustomerStatusDto customerStatusDto = CustomerStatusDto.builder()
                                                                   .customerX(customer.getX())
@@ -216,8 +219,15 @@ public class KafkaService {
                                                                   .destY(location.get().getY())
                                                                   .build();
                     publishToTaxi(taxi, customerStatusDto);
+                    customerTaxiAssignmentRepository.deleteAllByIdTaxiId(taxi.getId());
+
                     customerTaxiAssignmentService.createCustomerTaxiAssignment(customer.getId(), taxi.getId());
                     return true;
+                } else{
+                    log.error("Taxi {} not connected, available socket IPs are: {}", taxi.getIdentifier(), clientHandler.getConnectedTaxis().values()
+                            .stream()
+                            .map(client -> client.getInetAddress().getHostAddress())
+                            .toList());
                 }
             }
         }
@@ -225,94 +235,141 @@ public class KafkaService {
         return false;
     }
 
+
+    /**
+     * Check if the taxi socket is still up.
+     *
+     * @param socket taxi Socket
+     * @return true if a taxi socket was successfully up, false otherwise
+     */
+
+    public boolean isTaxiConnected(Socket socket, String identifier){
+
+        if (socket != null && socket.isConnected() && !socket.isClosed()) {
+            log.info("socket SI disponible {}", socket);
+            return true;
+        } else if (socket != null && socket.isClosed()) {
+            clientHandler.getConnectedTaxis().remove(identifier);
+        }
+        log.info("socket NO disponible {}", socket);
+        return false;
+    }
+
+
     /**
      * Listens for taxi directions from Kafka.
      *
-     * @param taxiStatusMessage the message containing the taxi status
+     * @param encryptedPayload the message containing the taxi status
      */
     @KafkaListener(topics = "taxi-directions", groupId = "group", containerFactory = "kafkaListenerContainerFactory")
-    public void listenTaxiDirections(String taxiStatusMessage) {
-        log.info("Received Taxi Status Update: {}", taxiStatusMessage);
-        // Crear un nuevo objeto TaxiStatusDto usando el constructor
-        TaxiStatusDto taxiStatusDto = MappingUtils.mapFromString(taxiStatusMessage, TaxiStatusDto.class);
+    public void listenTaxiDirections(String encryptedPayload) {
+        log.info("Received encrypted Taxi Status Update: {}", encryptedPayload);
 
-        // Actualizar la localización del taxi en tu sistema
-        taxiService.updateTaxiLocationByIdentifier(taxiStatusDto);
+        try {
+            // Dividir el payload en clave AES cifrada y mensaje cifrado
+            String[] parts = encryptedPayload.split("#", 2);
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("Invalid payload format. Expected AES key and encrypted message separated by '#'.");
+            }
+            String encryptedAESKey = parts[0];
+            String encryptedMessage = parts[1];
 
-        int x = taxiStatusDto.getX();
-        int y = taxiStatusDto.getY();
-        Taxi taxi = taxiRepository.findTaxiByIdentifier(taxiStatusDto.getTaxiId());
+            // Descifrar la clave AES con la clave privada de Central
+            String aesKeyEncoded = encryptionService.decryptWithRSA(encryptedAESKey);
+            SecretKey aesKey = encryptionService.decodeKey(aesKeyEncoded);
 
-        switch (taxiStatusDto.getStatus()) {
-            case TaxiState.STOPPED -> cityMap.updatePosition(x, y, cityMap.getPosition(x, y).data(), CityMap.Color.RED);
+            // Descifrar el mensaje con AES
+            String decryptedMessage = encryptionService.decryptWithAES(encryptedMessage, aesKey);
 
-            case TaxiState.EN_ROUTE_TO_DESTINATION -> {
-                Optional<CustomerTaxiAssignment> taxiAssignment = customerTaxiAssignmentRepository.findByIdTaxiId(taxi.getId());
-                if (taxiAssignment.isPresent()) {
-                    Long customerId = taxiAssignment.get().getId().getCustomerId();
-                    Customer customer = customerRepository.findById(customerId).orElseThrow();
-                    customer.setX(x);
-                    customer.setY(y);
-                    customerRepository.save(customer);
-                    cityMap.updatePosition(x, y, taxiStatusDto.getTaxiId() + customer.getDestIdentifier(), CityMap.Color.GREEN);
-                } else{
-                    log.error("Taxi assignment not found for taxi {}", taxi.getIdentifier());
+            // Mapear el mensaje descifrado a un objeto DTO
+            TaxiStatusDto taxiStatusDto = MappingUtils.mapFromString(decryptedMessage, TaxiStatusDto.class);
+            log.info("transcription de encryptedPayload: {}", taxiStatusDto);
+            // Validar el token
+            String registeredToken = clientHandler.getTokenRegistry().get(taxiStatusDto.getTaxiId());
+            if (registeredToken == null || !registeredToken.equals(taxiStatusDto.getToken())) {
+                log.error("Invalid token for taxi {}. Received token: {}, Expected token: {}",
+                        taxiStatusDto.getTaxiId(), taxiStatusDto.getToken(), registeredToken);
+                throw new RuntimeException("Invalid token");
+            }
+            log.info("Token validated successfully for taxi {}", taxiStatusDto.getTaxiId());
+
+            // Actualizar la localización del taxi en el sistema
+            taxiService.updateTaxiLocationByIdentifier(taxiStatusDto);
+
+            int x = taxiStatusDto.getX();
+            int y = taxiStatusDto.getY();
+            Taxi taxi = taxiRepository.findTaxiByIdentifier(taxiStatusDto.getTaxiId());
+
+            switch (taxiStatusDto.getStatus()) {
+                case TaxiState.STOPPED -> cityMap.updatePosition(x, y, cityMap.getPosition(x, y).data(), CityMap.Color.RED);
+
+                case TaxiState.EN_ROUTE_TO_DESTINATION -> {
+                    Optional<CustomerTaxiAssignment> taxiAssignment = customerTaxiAssignmentRepository.findByIdTaxiId(taxi.getId());
+                    if (taxiAssignment.isPresent()) {
+                        Long customerId = taxiAssignment.get().getId().getCustomerId();
+                        Customer customer = customerRepository.findById(customerId).orElseThrow();
+                        customer.setX(x);
+                        customer.setY(y);
+                        customerRepository.save(customer);
+                        cityMap.updatePosition(x, y, taxiStatusDto.getTaxiId() + customer.getDestIdentifier(), CityMap.Color.GREEN);
+                    } else {
+                        log.error("Taxi assignment not found for taxi {}", taxi.getIdentifier());
+                    }
+                }
+                case TaxiState.RETURNING_TO_BASE -> {
+                    if (taxi.getX() == 1 && taxi.getY() == 1) {
+                        taxi.setAvailable(true);
+                        taxi.setState(TaxiState.IDLE);
+                        taxi.setDestIdentifier(null);
+                        log.info(clientHandler.getTokenRegistry().toString());
+                        clientHandler.getTokenRegistry().remove(taxi.getIdentifier());
+                        log.info(clientHandler.getTokenRegistry().toString());
+                    }
+                    taxiRepository.save(taxi);
+                }
+                case TaxiState.DESTINATION_REACHED -> {
+                    taxi.setState(TaxiState.RETURNING_TO_BASE);
+                    taxiRepository.save(taxi);
+                    CustomerStatusDto customerStatusDto = CustomerStatusDto.builder()
+                                                                  .customerX(-1)
+                                                                  .customerY(-1)
+                                                                  .x(taxi.getX())
+                                                                  .y(taxi.getY())
+                                                                  .taxiId(taxi.getIdentifier())
+                                                                  .status(taxi.getState())
+                                                                  .destX(-1)
+                                                                  .destY(-1)
+                                                                  .build();
+                    publishToTaxi(taxi, customerStatusDto);
+
+                    Optional<CustomerTaxiAssignment> taxiAssignment = customerTaxiAssignmentRepository.findByIdTaxiId(taxi.getId());
+                    if (taxiAssignment.isPresent()) {
+                        Long customerId = taxiAssignment.get().getId().getCustomerId();
+                        Customer customer = customerRepository.findById(customerId).orElseThrow();
+                        publishToClient(customer, "END");
+                    } else {
+                        log.error("Taxi assignment not found for taxi {}", taxi.getIdentifier());
+                    }
+                }
+                case TaxiState.PICKUP -> {
+                    taxi.setState(TaxiState.EN_ROUTE_TO_DESTINATION);
+                    taxiRepository.save(taxi);
                 }
             }
-            case TaxiState.RETURNING_TO_BASE -> {
-                if (taxi.getX() == 1 && taxi.getY() == 1) {
-                    taxi.setAvailable(true);
-                    taxi.setState(TaxiState.IDLE);
-                    taxi.setDestIdentifier(null);
-                }
-                 taxiRepository.save(taxi);
 
-            }
+            log.info("Taxi {} location updated to [{}, {}]",
+                    taxiStatusDto.getTaxiId(), taxiStatusDto.getX(), taxiStatusDto.getY());
 
-            case TaxiState.DESTINATION_REACHED -> {
-                taxi.setState(TaxiState.RETURNING_TO_BASE);
-                taxiRepository.save(taxi);
-                CustomerStatusDto customerStatusDto = CustomerStatusDto.builder()
-                        .customerX(-1)
-                        .customerY(-1)
-                        .x(taxi.getX())
-                        .y(taxi.getY())
-                        .taxiId(taxi.getIdentifier())
-                        .status(taxi.getState())
-                        .destX(-1)
-                        .destY(-1)
-                        .build();
-                publishToTaxi(taxi, customerStatusDto);
-
-                Optional<CustomerTaxiAssignment> taxiAssignment = customerTaxiAssignmentRepository.findByIdTaxiId(taxi.getId());
-                if (taxiAssignment.isPresent()) {
-                    Long customerId = taxiAssignment.get().getId().getCustomerId();
-                    Customer customer = customerRepository.findById(customerId).orElseThrow();
-                    publishToClient(customer, "END");
-                } else {
-                    log.error("Taxi assignment not found for taxi {}", taxi.getIdentifier());
-                }
-            }
-            case TaxiState.PICKUP -> {
-                taxi.setState(TaxiState.EN_ROUTE_TO_DESTINATION);
-                taxiRepository.save(taxi);
-            }
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid message format: {}", e.getMessage());
+        } catch (Exception e) {
+            log.error("Error processing taxi directions: {}", e.getMessage());
         }
-
-        log.info("Taxi {} location updated to [{}, {}]",
-                taxiStatusDto.getTaxiId(), taxiStatusDto.getX(), taxiStatusDto.getY());
     }
 
-    /**
-     * Logs a message indicating that a Kafka message was sent.
-     *
-     * @param message the message that was sent
-     * @param topic the topic to which the message was sent
-     */
-    private void logKafkaSend(String message, String topic) {
-        log.info("[Topic: {}] {}", topic, message);
-    }
 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
     /**
      * Populates the city map with initial data.
      *

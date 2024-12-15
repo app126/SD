@@ -23,11 +23,10 @@ public class ECCustomerApplication implements CommandLineRunner {
 
     private final KafkaTemplate<String, String> kafkaTemplate;
 
-
     @Value("${client.id}")
     private String clientId;
 
-    @Value("${broker.address}")
+    @Value("${spring.kafka.bootstrap-servers}")
     private String brokerAddress;
 
     @Value("${file}")
@@ -47,40 +46,27 @@ public class ECCustomerApplication implements CommandLineRunner {
     }
 
     private void processServiceRequests() {
+        log.info("Sending service requests, using broker: {}", brokerAddress);
         try (BufferedReader br = new BufferedReader(new InputStreamReader(
                 new ClassPathResource(serviceRequestsFile).getInputStream()))) {
             String line;
             while ((line = br.readLine()) != null) {
-                boolean success = false;
-                while (!success) {
-                    try {
-                        ClientKafkaListener.semaphore.acquire();
+                ClientKafkaListener.semaphore.acquire();
 
-                        sendServiceRequest(line.trim());
+                sendServiceRequest(line.trim());
 
-                        success = true;
-
-                        log.info("Solicitud enviada exitosamente para la línea: {}", line.trim());
-
-                    } catch (Exception e) {
-                        log.error("Error al enviar la solicitud para la línea '{}'", line.trim(), e);
-                        TimeUnit.SECONDS.sleep(2);
-                    } finally {
-                        ClientKafkaListener.semaphore.release();
-                    }
-                }
-
+                // Espera 4 segundos entre solicitudes
                 TimeUnit.SECONDS.sleep(4);
+
             }
         } catch (IOException | InterruptedException e) {
-            log.error("Error al procesar las solicitudes de servicio", e);
-            Thread.currentThread().interrupt();
+            e.printStackTrace();
         }
     }
 
     private void sendServiceRequest(String destinationId) {
-        String requestMessage = clientId + "#" + destinationId;  // Formato del mensaje: "clientId#destinationId"
-        String topic = "service_requests";  // Tópico al que se envían las solicitudes de servicio
+        String requestMessage = clientId + "#" + destinationId; // Formato del mensaje: "clientId#destinationId"
+        String topic = "service_requests"; // Tópico al que se envían las solicitudes de servicio
         kafkaTemplate.send(topic, requestMessage);
         log.info("[topic{}] Sent service request for destination: {}", topic, destinationId);
     }

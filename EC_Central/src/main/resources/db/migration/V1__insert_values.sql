@@ -25,18 +25,18 @@ CREATE TABLE IF NOT EXISTS location (
 );
 
 CREATE TABLE IF NOT EXISTS customer_taxi_assignment (
-                                          customer_id BIGINT NOT NULL,
-                                          taxi_id BIGINT NOT NULL,
+                                          customer_id BIGINT NOT NULL unique ,
+                                          taxi_id BIGINT NOT NULL unique ,
                                           PRIMARY KEY (customer_id, taxi_id),
                                           CONSTRAINT fk_customer FOREIGN KEY (customer_id) REFERENCES customer(id),
                                           CONSTRAINT fk_taxi FOREIGN KEY (taxi_id) REFERENCES taxi(id)
 );
 
 INSERT INTO Taxi (identifier, available, x, y)
-VALUES ('1', true, 0, 0),
-       ('2', true, 0, 0),
-       ('3', true, 0, 0),
-       ('4', true, 0, 0);
+VALUES ('1', true, 1, 1),
+       ('2', true, 1, 1),
+       ('3', true, 1, 1),
+       ('4', true, 1, 1);
 -- INSERT INTO Taxi (identifier, available, x, y) VALUES
 --                                                    ('1', true, 1, 1),
 --                                                    ('2', true, 1, 1),

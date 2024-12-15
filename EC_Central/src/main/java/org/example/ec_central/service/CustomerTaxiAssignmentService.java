@@ -32,4 +32,8 @@ public class CustomerTaxiAssignmentService {
     public CustomerTaxiAssignment findByTaxiId(Long taxiId) {
         return this.customerTaxiAssignmentRepository.findByIdTaxiId(taxiId).orElseThrow();
     }
+
+
+
+
 }
