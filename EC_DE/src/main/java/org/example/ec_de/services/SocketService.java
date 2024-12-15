@@ -8,6 +8,10 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+import java.security.KeyFactory;
+import java.security.PublicKey;
 
 /**
  * Service class for handling socket communication with EC_Central.
@@ -15,6 +19,13 @@ import java.net.Socket;
 @Service
 @Slf4j
 public class SocketService {
+
+    private final EncryptionService encryptionService;
+
+    /**
+     * Taxi token
+     */
+    private String authToken;
 
     /**
      * Start of Text character.
@@ -59,6 +70,10 @@ public class SocketService {
      */
     private DataInputStream inputStream;
 
+    public SocketService(EncryptionService encryptionService) {
+        this.encryptionService = encryptionService;
+    }
+
     /**
      * Logs startup information including taxi ID, central IP, and port.
      */
@@ -75,13 +90,17 @@ public class SocketService {
         this.logStartupInfo();
         new Thread(() -> {
             while (true) {
+
                 try {
                     if (authenticate()) {
                         log.info("Successfully authenticated with EC_Central.");
                         keepAlive();
                     } else {
                         log.error("Failed to authenticate with EC_Central.");
+                        Thread.sleep(5000);
+
                     }
+
                 } catch (IOException e) {
                     log.error("Error during connection setup: {}", e.getMessage());
                     closeConnection();
@@ -91,6 +110,8 @@ public class SocketService {
                     } catch (InterruptedException interruptedException) {
                         log.error("Interrupted while waiting to reconnect: {}", interruptedException.getMessage());
                     }
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
                 }
             }
         }).start();
@@ -102,27 +123,76 @@ public class SocketService {
      * @return true if authentication is successful, false otherwise
      * @throws IOException if an I/O error occurs during authentication
      */
+    /**
+     * Authenticates the connection with the central server.
+     *
+     * @return true if authentication is successful, false otherwise
+     * @throws IOException if an I/O error occurs during authentication
+     */
     public boolean authenticate() throws IOException {
         connectToCentral();
-        // Format: AUTH#DigitalEngine#{token}#{taxiID}
+        // Formato del mensaje de autenticación: AUTH#DigitalEngine#{token}#{taxiID}
         String authMessage = buildMessage(String.format("AUTH#%s#token123", taxiId));
         outputStream.writeUTF(authMessage);
         log.info("Sent authentication message: {}", authMessage);
 
+        exchangePublicKeys();
+
+        // Leer la respuesta del servidor
         String response = inputStream.readUTF();
+        log.info("Received response: {}", response);
+
         if (isValidMessage(response)) {
+            // Extraer los datos de la respuesta (sin STX, ETX y LRC)
             String data = extractData(response);
-            if ("ACK".equals(data)) {
-                log.info("Authentication successful.");
+            log.info("Extracted data: {}", data);
+
+            // Dividir los datos recibidos por el separador (FIELD_SEPARATOR: #)
+            String[] parts = data.split("#");
+
+            // Verificar si la respuesta es un ACK con token
+            if (parts.length == 2 && "ACK".equals(parts[0])) {
+                String token = parts[1];
+                this.authToken = token;
+                log.info("Authentication successful. Token: {}", token);
                 return true;
             } else {
-                log.error("Authentication failed: {}", data);
+                log.error("Authentication failed or invalid response format: {}", data);
             }
         } else {
-            log.error("Invalid response during authentication.");
+            log.error("Invalid message received during authentication.");
         }
         return false;
     }
+
+
+    /**
+     * Intercambia claves públicas con EC_Central durante la autenticación.
+     *
+     * @throws IOException si ocurre un error de E/S
+     */
+    private void exchangePublicKeys() throws IOException {
+        try {
+            // Enviar clave pública del taxi (EC_DE)
+            String taxiPublicKeyBase64 = Base64.getEncoder().encodeToString(encryptionService.getTaxiPublicKey().getEncoded());
+            outputStream.writeUTF(taxiPublicKeyBase64);
+            log.info("Sent taxi public key to EC_Central.");
+
+            // Recibir clave pública de Central
+            String centralPublicKeyBase64 = inputStream.readUTF();
+            byte[] centralPublicKeyBytes = Base64.getDecoder().decode(centralPublicKeyBase64);
+            KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+            PublicKey centralPublicKey = keyFactory.generatePublic(new X509EncodedKeySpec(centralPublicKeyBytes));
+            encryptionService.setCentralPublicKey(centralPublicKey);
+            log.info("Received and stored EC_Central's public key.{}", centralPublicKey);
+        } catch (Exception e) {
+            log.error("Error during key exchange with EC_Central: {}", e.getMessage());
+            throw new IOException("Public key exchange failed", e);
+        }
+    }
+
+
+
 
     /**
      * Connects to the central server.
@@ -142,13 +212,22 @@ public class SocketService {
     public void keepAlive() {
         try {
             while (true) {
+                if (socket == null || socket.isClosed() || !socket.isConnected()) {
+                    log.error("Connection lost. Attempting to reconnect...");
+                    closeConnection();
+                    initialize(); // Intentar reconectar
+                    break; // Sal del bucle y vuelve a iniciar la conexión
+                }
+                log.info("Connection is alive.");
                 Thread.sleep(5000);
             }
         } catch (InterruptedException e) {
-            log.error("Error in communication: " + e.getMessage());
+            log.error("Thread interrupted: {}", e.getMessage());
+            Thread.currentThread().interrupt(); // Restablece el estado interrumpido
             closeConnection();
         }
     }
+
 
     /**
      * Closes the socket connection.
@@ -160,9 +239,13 @@ public class SocketService {
                 log.info("Connection closed.");
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            log.error("Error while closing the connection: {}", e.getMessage());
+        } finally {
+            authToken = null; // Limpiar el token al cerrar la conexión
+            log.info("Authentication token cleared.");
         }
     }
+
 
     /**
      * Builds a message with the given data, including STX, ETX, and LRC.
@@ -213,5 +296,14 @@ public class SocketService {
      */
     private String extractData(String message) {
         return message.substring(1, message.indexOf(ETX));
+    }
+
+    /**
+     * Returns the authentication token.
+     *
+     * @return the authentication token
+     */
+    public String getAuthToken() {
+        return authToken;
     }
 }

@@ -3,6 +3,7 @@ package org.example.ec_de.services;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.example.ec_de.model.SensorStatus;
+import org.example.ec_de.model.TaxiState;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -67,7 +68,9 @@ public class SensorService {
                     BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                     String inputLine;
                     while ((inputLine = in.readLine()) != null) {
-                        kafkaService.getShortestPathFinder().setStop(!inputLine.equals(SensorStatus.OK.name()));
+                        if (!inputLine.equals(SensorStatus.OK.name())) {
+                            kafkaService.getShortestPathFinder().setTaxiState(TaxiState.STOPPED);
+                        }
                         log.info("Received: {}", inputLine);
                     }
                 }
