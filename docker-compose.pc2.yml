@@ -1,8 +1,14 @@
-version: '3.9'
 services:
+
+#docker-compose -f docker-compose.pc2.yml down --volumes --remove-orphans
+
+#  docker-compose -f docker-compose.pc1.yml up --build -d
+#  docker-compose -f docker-compose.pc2.yml up --build -d
+#  docker-compose -f docker-compose.pc3.yml up --build -d
+
   postgres:
     image: postgres:14
-    container_name: postgres
+    container_name: postgres_easycab
     environment:
       POSTGRES_DB: easycab
       POSTGRES_USER: postgres
@@ -11,29 +17,66 @@ services:
       - "5432:5432"
     networks:
       easycab_network:
-        ipv4_address: 192.168.100.30
+        ipv4_address: 192.168.100.100
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
   ec_central:
     build:
       context: .
       dockerfile: ./EC_Central/Dockerfile
     image: ec-central:latest
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://192.168.1.16:5432/easycab
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: 5050
+      SPRING_APPLICATION_NAME: EC_Central
+      SPRING_DATASOURCE_URL: jdbc:postgresql://192.168.100.100:5432/easycab
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: 198.19.249.20:9092
+      SPRING_KAFKA_BOOTSTRAP-SERVERS: 192.168.100.3:9092
       SERVER_PORT: 8081
+      BROKER_ADDRESS: 192.168.100.3:9092
+      CTC_URL: http://192.168.100.200:8082/traffic
     ports:
       - "8081:8081"
       - "9090:9090"
     networks:
-      - easycab_network
+      easycab_network:
+        ipv4_address: 192.168.100.4
+      shared-network: {}
+
     depends_on:
       - postgres
-volumes:
-  postgres_data:
+
+  ec_ctc:
+    container_name: ec_ctc
+    build:
+      context: .
+      dockerfile: ./EC_CTC/Dockerfile
+    image: ec-ctc:latest
+    environment:
+      LOGSTASH_HOST: logstash
+      LOGSTASH_PORT: 5050
+      SPRING_APPLICATION_NAME: EC_CTC
+    ports:
+      - "8082:8082"
+    networks:
+      - easycab_network
+      - shared-network
+
+
+  nginx:
+    build:
+      context: ./taxi-tracker-nginx
+      dockerfile: Dockerfile
+    container_name: taxi-tracker-nginx
+    ports:
+      - "8080:80"
+    networks:
+      easycab_network:
+        ipv4_address: 192.168.100.14
+    depends_on:
+      - ec_central
 
 networks:
   easycab_network:
@@ -41,3 +84,5 @@ networks:
     ipam:
       config:
         - subnet: 192.168.100.0/24
+volumes:
+  postgres_data:
